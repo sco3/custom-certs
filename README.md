@@ -1,54 +1,57 @@
 # custom-certs
 
-Minimal FastAPI HTTPS lab for testing whether one `httpx.Client` with a shared connection pool/transport can make requests using different SSL trust contexts.
+Small FastAPI HTTPS lab for checking how `httpx.AsyncClient` behaves with public TLS and a local self-signed certificate.
 
-## What it does
-
-- starts a local FastAPI server on `https://127.0.0.1:8443`
-- generates a self-signed certificate for `localhost` and `127.0.0.1`
-- uses one explicit `httpx.HTTPTransport` inside one `httpx.Client`
-- sends one request to a public HTTPS API
-- sends one request to the local HTTPS server
-- passes different `verify=` SSL contexts per request to investigate trust-store behavior
-
-## Project files
-
-- `server.py` - FastAPI app
-- `generate_cert.py` - self-signed certificate generator
-- `run_server.py` - HTTPS server launcher
-- `client.py` - SSL context experiment client
-
-## Setup with uv
+## Setup
 
 ```bash
 uv sync
-```
-
-## Generate certificate
-
-```bash
 uv run generate-cert
 ```
 
-## Run the HTTPS server
+## Run
+
+Start the HTTPS server:
 
 ```bash
 uv run run-server
 ```
 
-## Run the client experiment
-
-In another terminal:
+In another terminal run the client:
 
 ```bash
 uv run run-client
 ```
 
-## Expected investigation outcome
+## What the client does
 
-The client is intentionally written to reuse one explicit `httpx` transport while sending requests with two different SSL contexts:
+The client uses one `httpx.AsyncClient` with `mounts`:
 
-- public CA context for `https://jsonplaceholder.typicode.com`
-- custom trust context for `https://127.0.0.1:8443`
+- `https://127.0.0.1:8443` uses a transport that trusts `certs/localhost.crt`
+- `https://` uses a transport that trusts the normal public CA bundle from `certifi`
 
-If `httpx` honors per-request `verify=` with the shared transport, both positive requests should succeed, while the negative cross-usage checks should fail with certificate verification errors.
+So one client object routes requests to different transports.
+
+## Observed behavior
+
+Running the sample produced:
+
+```text
+mounted client ssl test
+public: 200
+local: 200
+done
+```
+
+## Conclusion
+
+- A single plain `httpx` transport/pool does not switch SSL context per request.
+- A single `httpx.AsyncClient` can still talk to both endpoints if you use `mounts`.
+- Each mounted transport has its own SSL context and its own connection pool.
+
+## Files
+
+- `server.py` — FastAPI app
+- `generate_cert.py` — creates the self-signed certificate
+- `run_server.py` — starts uvicorn with TLS
+- `client.py` — async client test
