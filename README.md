@@ -23,93 +23,107 @@ In another terminal run the client:
 uv run client.py
 ```
 
-## What the client does
+## Current approach
 
-The client uses one `httpx.AsyncClient` with `mounts`:
+The current client uses a small registry-style manager:
 
-- `https://127.0.0.1:8443` uses a transport that trusts `certs/localhost.crt`
-- `https://` uses a transport that trusts the normal public CA bundle from `certifi`
+- one default `AsyncClient` is created for normal public HTTPS traffic
+- when a different trust configuration is needed, a new named client is created and cached
+- later calls can reuse that named client instead of rebuilding it every time
 
-So one client object routes requests to different transports.
+This avoids mutating private `httpx` internals such as `_mounts`.
 
-The client also patches `ssl.create_default_context` in `ctx.py` to count how many default SSL contexts are created during the run.
+## Registry idea
+
+The client keeps a dictionary of clients keyed by context name.
+
+- `"default"` → client using the normal public CA bundle
+- `"local"` → client using the self-signed local certificate
+
+Conceptually it works like this:
+
+```python
+client = await manager.get_client("default")
+await client.get("https://jsonplaceholder.typicode.com/todos/1")
+
+client = await manager.get_client(
+    "local",
+    verify=ssl.create_default_context(cafile="certs/localhost.crt"),
+)
+await client.get("https://127.0.0.1:8443/health")
+```
 
 ## Mermaid diagram
 
 ```mermaid
 flowchart TD
-    A[httpx.AsyncClient] --> B[Mount: https://]
-    A --> C[Mount: https://127.0.0.1:8443]
+    A[ClientManager registry] --> B[default client]
+    A --> C[local client]
 
-    B --> D[AsyncHTTPTransport]
-    D --> E[Public CA SSL context]
-    D --> F[Public connection pool]
-    F --> G[jsonplaceholder.typicode.com]
+    B --> D[Public CA SSL context]
+    B --> E[Public connection pool]
+    E --> F[jsonplaceholder.typicode.com]
 
-    C --> H[AsyncHTTPTransport]
-    H --> I[Local cert SSL context]
-    H --> J[Local connection pool]
-    J --> K[127.0.0.1:8443 FastAPI server]
+    C --> G[Local cert SSL context]
+    C --> H[Local connection pool]
+    H --> I[127.0.0.1:8443 FastAPI server]
 ```
-
-This shows the important point:
-
-- the same top-level client is used for both requests
-- different SSL contexts work because the client routes by mount
-- each mounted transport has its own pool and SSL configuration
 
 ## Observed behavior
 
 Latest run output:
 
 ```text
-PID 522092 SSL Context Created 0.0009072760003618896
-PID 522092 SSL Context Created 0.0019557740015443414
-mounted client ssl test
-iter 1 public: 200
-iter 1 local: 200
-iter 2 public: 200
-iter 2 local: 200
-iter 3 public: 200
-iter 3 local: 200
-iter 4 public: 200
-iter 4 local: 200
-iter 5 public: 200
-iter 5 local: 200
-iter 6 public: 200
-iter 6 local: 200
-iter 7 public: 200
-iter 7 local: 200
-iter 8 public: 200
-iter 8 local: 200
-iter 9 public: 200
-iter 9 local: 200
-iter 10 public: 200
-iter 10 local: 200
-done
+PID 525400 SSL Context Created 0.0039573299982293975
+client manager ssl test
+public: 200
+local before new client: ConnectError
+PID 525400 SSL Context Created 0.0022826179992989637
+local after new client: 200
 default ssl contexts created: 2
 ```
 
-## What this means
+## What this shows
 
-- the same `httpx.AsyncClient` successfully made all 20 requests
-- public requests used the public CA transport
-- local requests used the local self-signed-cert transport
-- only 2 default SSL contexts were created for the whole run
-- those 2 contexts were reused across all 10 iterations
+- the default client works for the public HTTPS endpoint
+- the same default client fails for the local self-signed endpoint
+- creating a second registered client with the local trust makes the local request succeed
+- two default SSL contexts were created during the run
+- each SSL context is tied to its own client and connection pool
+
+## Usage notes
+
+1. Start the local server:
+   ```bash
+   uv run run-server
+   ```
+
+2. Run the client:
+   ```bash
+   uv run client.py
+   ```
+
+3. Read the output:
+   - `public: 200` means the default public client worked
+   - `local before new client: ConnectError` means the public-trust client cannot verify the self-signed cert
+   - `local after new client: 200` means the registered local-trust client worked
 
 ## Conclusion
 
-- A single plain `httpx` transport/pool does not switch SSL context per request.
-- A single `httpx.AsyncClient` can still work with different SSL contexts by using `mounts`.
-- In this setup, the same client works for both endpoints.
-- The SSL separation happens at the mounted transport/pool level.
-- The observed run shows that the contexts are created once and reused.
+The safe approach is not to force one pool to switch SSL contexts dynamically.
+
+Instead:
+
+- keep a registry of `AsyncClient` instances
+- create one client per SSL/trust configuration
+- reuse clients by context name
+
+That gives you predictable behavior and keeps connection pooling per SSL context.
 
 ## Files
 
 - `server.py` — FastAPI app
 - `generate_cert.py` — creates the self-signed certificate
 - `run_server.py` — starts uvicorn with TLS
-- `client.py` — async client test
+- `client.py` — async client test using the registry approach
 - `ctx.py` — patches `ssl.create_default_context` and counts created contexts
