@@ -1,6 +1,7 @@
 import asyncio, ssl
 
 import certifi, httpx
+import ctx
 
 
 async def async_main():
@@ -16,12 +17,14 @@ async def async_main():
         timeout=10.0,
     ) as client:
         print("mounted client ssl test")
-        print(f"public: {(await client.get('https://jsonplaceholder.typicode.com/todos/1')).status_code}")
-        try:
-            print(f"local: {(await client.get('https://127.0.0.1:8443/health')).status_code}")
-        except Exception as exc:
-            print(f"local: {type(exc).__name__}")
+        for i in range(10):
+            print(f"iter {i + 1} public: {(await client.get('https://jsonplaceholder.typicode.com/todos/1')).status_code}")
+            try:
+                print(f"iter {i + 1} local: {(await client.get('https://127.0.0.1:8443/health')).status_code}")
+            except Exception as exc:
+                print(f"iter {i + 1} local: {type(exc).__name__}")
         print("done")
+        print(f"default ssl contexts created: {ctx.SSLValidator.count}")
 
 
 def main():

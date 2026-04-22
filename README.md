@@ -20,7 +20,7 @@ uv run run-server
 In another terminal run the client:
 
 ```bash
-uv run run-client
+uv run client.py
 ```
 
 ## What the client does
@@ -31,6 +31,8 @@ The client uses one `httpx.AsyncClient` with `mounts`:
 - `https://` uses a transport that trusts the normal public CA bundle from `certifi`
 
 So one client object routes requests to different transports.
+
+The client also patches `ssl.create_default_context` in `ctx.py` to count how many default SSL contexts are created during the run.
 
 ## Mermaid diagram
 
@@ -50,7 +52,7 @@ flowchart TD
     J --> K[127.0.0.1:8443 FastAPI server]
 ```
 
-This illustrates the key point:
+This shows the important point:
 
 - the same top-level client is used for both requests
 - different SSL contexts work because the client routes by mount
@@ -58,33 +60,51 @@ This illustrates the key point:
 
 ## Observed behavior
 
-Running the sample produced:
+Latest run output:
 
 ```text
+PID 522092 SSL Context Created 0.0009072760003618896
+PID 522092 SSL Context Created 0.0019557740015443414
 mounted client ssl test
-public: 200
-local: 200
+iter 1 public: 200
+iter 1 local: 200
+iter 2 public: 200
+iter 2 local: 200
+iter 3 public: 200
+iter 3 local: 200
+iter 4 public: 200
+iter 4 local: 200
+iter 5 public: 200
+iter 5 local: 200
+iter 6 public: 200
+iter 6 local: 200
+iter 7 public: 200
+iter 7 local: 200
+iter 8 public: 200
+iter 8 local: 200
+iter 9 public: 200
+iter 9 local: 200
+iter 10 public: 200
+iter 10 local: 200
 done
+default ssl contexts created: 2
 ```
 
-This shows that the same `httpx.AsyncClient` can successfully call both endpoints even though they require different SSL trust settings.
+## What this means
 
-## Important detail about the pool
-
-The important result is:
-
-- from the caller point of view, the same client works for both requests
-- the client can use different SSL contexts for different destinations
-- this works because `mounts` route requests to different transports
-- each mounted transport has its own SSL context and its own HTTP connection pool
-
-So the same top-level client works across different SSL contexts, but not by reusing one single underlying pool for all destinations.
+- the same `httpx.AsyncClient` successfully made all 20 requests
+- public requests used the public CA transport
+- local requests used the local self-signed-cert transport
+- only 2 default SSL contexts were created for the whole run
+- those 2 contexts were reused across all 10 iterations
 
 ## Conclusion
 
 - A single plain `httpx` transport/pool does not switch SSL context per request.
 - A single `httpx.AsyncClient` can still work with different SSL contexts by using `mounts`.
-- In practice, the same client can talk to both endpoints, but the SSL separation happens at the mounted transport/pool level.
+- In this setup, the same client works for both endpoints.
+- The SSL separation happens at the mounted transport/pool level.
+- The observed run shows that the contexts are created once and reused.
 
 ## Files
 
@@ -92,3 +112,4 @@ So the same top-level client works across different SSL contexts, but not by reu
 - `generate_cert.py` — creates the self-signed certificate
 - `run_server.py` — starts uvicorn with TLS
 - `client.py` — async client test
+- `ctx.py` — patches `ssl.create_default_context` and counts created contexts
