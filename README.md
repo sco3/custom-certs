@@ -32,6 +32,30 @@ The client uses one `httpx.AsyncClient` with `mounts`:
 
 So one client object routes requests to different transports.
 
+## Mermaid diagram
+
+```mermaid
+flowchart TD
+    A[httpx.AsyncClient] --> B[Mount: https://]
+    A --> C[Mount: https://127.0.0.1:8443]
+
+    B --> D[AsyncHTTPTransport]
+    D --> E[Public CA SSL context]
+    D --> F[Public connection pool]
+    F --> G[jsonplaceholder.typicode.com]
+
+    C --> H[AsyncHTTPTransport]
+    H --> I[Local cert SSL context]
+    H --> J[Local connection pool]
+    J --> K[127.0.0.1:8443 FastAPI server]
+```
+
+This illustrates the key point:
+
+- the same top-level client is used for both requests
+- different SSL contexts work because the client routes by mount
+- each mounted transport has its own pool and SSL configuration
+
 ## Observed behavior
 
 Running the sample produced:
@@ -43,11 +67,24 @@ local: 200
 done
 ```
 
+This shows that the same `httpx.AsyncClient` can successfully call both endpoints even though they require different SSL trust settings.
+
+## Important detail about the pool
+
+The important result is:
+
+- from the caller point of view, the same client works for both requests
+- the client can use different SSL contexts for different destinations
+- this works because `mounts` route requests to different transports
+- each mounted transport has its own SSL context and its own HTTP connection pool
+
+So the same top-level client works across different SSL contexts, but not by reusing one single underlying pool for all destinations.
+
 ## Conclusion
 
 - A single plain `httpx` transport/pool does not switch SSL context per request.
-- A single `httpx.AsyncClient` can still talk to both endpoints if you use `mounts`.
-- Each mounted transport has its own SSL context and its own connection pool.
+- A single `httpx.AsyncClient` can still work with different SSL contexts by using `mounts`.
+- In practice, the same client can talk to both endpoints, but the SSL separation happens at the mounted transport/pool level.
 
 ## Files
 
