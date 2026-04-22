@@ -3,12 +3,19 @@ import asyncio, ssl
 import certifi, httpx
 
 
-async def main():
-    transport = httpx.AsyncHTTPTransport(
-        verify=ssl.create_default_context(cafile=certifi.where()), retries=0
-    )
-    async with httpx.AsyncClient(transport=transport, timeout=10.0) as client:
-        print("shared client ssl test")
+async def async_main():
+    async with httpx.AsyncClient(
+        mounts={
+            "https://127.0.0.1:8443": httpx.AsyncHTTPTransport(
+                verify=ssl.create_default_context(cafile="certs/localhost.crt"), retries=0
+            ),
+            "https://": httpx.AsyncHTTPTransport(
+                verify=ssl.create_default_context(cafile=certifi.where()), retries=0
+            ),
+        },
+        timeout=10.0,
+    ) as client:
+        print("mounted client ssl test")
         print(f"public: {(await client.get('https://jsonplaceholder.typicode.com/todos/1')).status_code}")
         try:
             print(f"local: {(await client.get('https://127.0.0.1:8443/health')).status_code}")
@@ -17,5 +24,9 @@ async def main():
         print("done")
 
 
+def main():
+    asyncio.run(async_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
